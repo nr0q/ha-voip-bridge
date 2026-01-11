@@ -141,11 +141,12 @@ class VoIPBridgePhone:
         
         # Store the call
         self.current_call = call
+        _LOGGER.info("Call stored")
         
         # Extract caller info
         caller_uri = call.request.headers['From']['uri']
         _LOGGER.info(f"Caller URI: {caller_uri}")
-        
+            
         # Answer the call
         try:
             call.answer()
