@@ -232,31 +232,230 @@ class VoipBridgeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Get the options flow for this handler."""
         return VoipBridgeOptionsFlowHandler()
 
+
 class VoipBridgeOptionsFlowHandler(config_entries.OptionsFlow):
-    """Handle options flow for VoIP Bridge."""
+    """Handle options flow for VoIP Bridge - multi-step like initial config."""
+
+    def __init__(self) -> None:
+        """Initialize options flow."""
+        self._data: dict[str, Any] = {}
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Manage the options."""
-        if user_input is not None:
-            return self.async_create_entry(title="", data=user_input)
+        """Initial step - choose what to configure."""
+        return await self.async_step_voip()
 
-        # Show current settings for modification
+    async def async_step_voip(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Configure VoIP settings."""
+        if user_input is not None:
+            self._data.update(user_input)
+            return await self.async_step_security()
+
+        data_schema = vol.Schema({
+            vol.Required(
+                CONF_SIP_SERVER,
+                default=self.config_entry.data.get(CONF_SIP_SERVER)
+            ): str,
+            vol.Required(
+                CONF_SIP_PORT,
+                default=self.config_entry.data.get(CONF_SIP_PORT, DEFAULT_SIP_PORT)
+            ): int,
+            vol.Required(
+                CONF_SIP_USERNAME,
+                default=self.config_entry.data.get(CONF_SIP_USERNAME)
+            ): str,
+            vol.Required(
+                CONF_SIP_PASSWORD,
+                default=self.config_entry.data.get(CONF_SIP_PASSWORD)
+            ): str,
+            vol.Required(
+                CONF_SIP_EXTENSION,
+                default=self.config_entry.data.get(CONF_SIP_EXTENSION)
+            ): str,
+        })
+
         return self.async_show_form(
-            step_id="init",
-            data_schema=vol.Schema({
-                vol.Optional(
-                    CONF_REQUIRE_PIN_INTERNAL,
-                    default=self.config_entry.data.get(CONF_REQUIRE_PIN_INTERNAL, False),
-                ): bool,
-                vol.Optional(
-                    CONF_REQUIRE_PIN_EXTERNAL,
-                    default=self.config_entry.data.get(CONF_REQUIRE_PIN_EXTERNAL, True),
-                ): bool,
-                vol.Optional(
-                    CONF_PIN,
-                    default=self.config_entry.data.get(CONF_PIN, "1234"),
-                ): str,
-            }),
+            step_id="voip",
+            data_schema=data_schema,
+            description_placeholders={
+                "name": "FreePBX Connection",
+            },
+        )
+
+    async def async_step_security(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Configure security settings."""
+        if user_input is not None:
+            self._data.update(user_input)
+            return await self.async_step_outbound()
+
+        # Get current trusted caller IDs as comma-separated string
+        current_caller_ids = self.config_entry.data.get(CONF_TRUSTED_CALLER_IDS, [])
+        if isinstance(current_caller_ids, list):
+            caller_ids_str = ", ".join(current_caller_ids)
+        else:
+            caller_ids_str = current_caller_ids
+
+        data_schema = vol.Schema({
+            vol.Required(
+                CONF_REQUIRE_PIN_INTERNAL,
+                default=self.config_entry.data.get(CONF_REQUIRE_PIN_INTERNAL, False)
+            ): bool,
+            vol.Required(
+                CONF_REQUIRE_PIN_EXTERNAL,
+                default=self.config_entry.data.get(CONF_REQUIRE_PIN_EXTERNAL, True)
+            ): bool,
+            vol.Optional(
+                CONF_PIN,
+                default=self.config_entry.data.get(CONF_PIN, "1234")
+            ): str,
+            vol.Optional(
+                CONF_TRUSTED_CALLER_IDS,
+                default=caller_ids_str
+            ): str,
+        })
+
+        return self.async_show_form(
+            step_id="security",
+            data_schema=data_schema,
+            description_placeholders={
+                "name": "Security Settings",
+                "description": "Comma-separated list of trusted caller IDs",
+            },
+        )
+
+    async def async_step_outbound(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Configure outbound destinations."""
+        if user_input is not None:
+            # Parse destinations from text input
+            destinations = []
+            
+            destinations_input = user_input[CONF_OUTBOUND_DESTINATIONS]
+            if isinstance(destinations_input, str):
+                lines = destinations_input.split("\n")
+            else:
+                lines = destinations_input  # Already a list
+            
+            for idx, line in enumerate(lines):
+                line = line.strip()
+                if line:
+                    destinations.append({
+                        "number": line,
+                        "name": f"Destination {idx + 1}",
+                        "priority": idx + 1,
+                        "enabled": True,
+                    })
+            
+            self._data[CONF_OUTBOUND_DESTINATIONS] = destinations
+            return await self.async_step_audio()
+
+        # Get current destinations as newline-separated string
+        current_dests = self.config_entry.data.get(CONF_OUTBOUND_DESTINATIONS, [])
+        if isinstance(current_dests, list):
+            dests_str = "\n".join([d.get("number", "") for d in current_dests if d.get("number")])
+        else:
+            dests_str = current_dests
+
+        data_schema = vol.Schema({
+            vol.Required(
+                CONF_OUTBOUND_DESTINATIONS,
+                default=dests_str if dests_str else "5551234567"
+            ): selector.TextSelector(
+                selector.TextSelectorConfig(
+                    multiple=True,
+                    multiline=True,
+                )
+            ),
+        })
+
+        return self.async_show_form(
+            step_id="outbound",
+            data_schema=data_schema,
+            description_placeholders={
+                "name": "Outbound Destinations",
+                "description": "Enter phone numbers, one per line. First number has highest priority.",
+            },
+        )
+
+    async def async_step_audio(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Configure audio settings."""
+        if user_input is not None:
+            self._data.update(user_input)
+            
+            # Parse trusted caller IDs into list
+            if CONF_TRUSTED_CALLER_IDS in self._data:
+                caller_ids = self._data[CONF_TRUSTED_CALLER_IDS]
+                if isinstance(caller_ids, str):
+                    self._data[CONF_TRUSTED_CALLER_IDS] = [
+                        cid.strip() for cid in caller_ids.split(",") if cid.strip()
+                    ]
+            
+            # Update config entry
+            self.hass.config_entries.async_update_entry(
+                self.config_entry,
+                data={**self.config_entry.data, **self._data}
+            )
+            
+            return self.async_create_entry(title="", data={})
+
+        data_schema = vol.Schema({
+            vol.Optional(
+                CONF_ASSIST_PIPELINE,
+                default=self.config_entry.data.get(CONF_ASSIST_PIPELINE, "")
+            ): str,
+            vol.Required(
+                CONF_CODEC,
+                default=self.config_entry.data.get(CONF_CODEC, DEFAULT_CODEC)
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=["PCMU", "PCMA", "opus"],
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            ),
+            vol.Required(
+                CONF_SAMPLE_RATE,
+                default=str(self.config_entry.data.get(CONF_SAMPLE_RATE, DEFAULT_SAMPLE_RATE))
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=["8000", "16000"],
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            ),
+            vol.Required(
+                CONF_VAD_AGGRESSIVENESS,
+                default=self.config_entry.data.get(CONF_VAD_AGGRESSIVENESS, DEFAULT_VAD_AGGRESSIVENESS)
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=0,
+                    max=3,
+                    mode=selector.NumberSelectorMode.SLIDER,
+                )
+            ),
+            vol.Required(
+                CONF_SILENCE_TIMEOUT,
+                default=self.config_entry.data.get(CONF_SILENCE_TIMEOUT, DEFAULT_SILENCE_TIMEOUT)
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=0.5,
+                    max=5.0,
+                    step=0.5,
+                    mode=selector.NumberSelectorMode.SLIDER,
+                )
+            ),
+        })
+
+        return self.async_show_form(
+            step_id="audio",
+            data_schema=data_schema,
+            description_placeholders={
+                "name": "Audio Settings",
+            },
         )
