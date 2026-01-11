@@ -159,62 +159,66 @@ class VoipBridgeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Handle audio settings."""
-        if user_input is not None:
-            self._data.update(user_input)
+        try:
+            if user_input is not None:
+                self._data.update(user_input)
             
-            # Parse trusted caller IDs into list
-            if CONF_TRUSTED_CALLER_IDS in self._data:
-                caller_ids = self._data[CONF_TRUSTED_CALLER_IDS]
-                if isinstance(caller_ids, str):
-                    self._data[CONF_TRUSTED_CALLER_IDS] = [
-                        cid.strip() for cid in caller_ids.split(",") if cid.strip()
-                    ]
-            
-            # Create entry
-            return self.async_create_entry(
-                title=f"VoIP Bridge ({self._data[CONF_SIP_EXTENSION]})",
-                data=self._data,
+                # Parse trusted caller IDs into list
+                if CONF_TRUSTED_CALLER_IDS in self._data:
+                    caller_ids = self._data[CONF_TRUSTED_CALLER_IDS]
+                    if isinstance(caller_ids, str):
+                        self._data[CONF_TRUSTED_CALLER_IDS] = [
+                            cid.strip() for cid in caller_ids.split(",") if cid.strip()
+                        ]
+
+                # Create entry
+                return self.async_create_entry(
+                    title=f"VoIP Bridge ({self._data[CONF_SIP_EXTENSION]})",
+                    data=self._data,
+                )
+
+            data_schema = vol.Schema({
+                vol.Optional(CONF_ASSIST_PIPELINE, default=""): str,
+                vol.Required(CONF_CODEC, default=DEFAULT_CODEC): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=["PCMU", "PCMA", "opus"],
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                ),
+                vol.Required(CONF_SAMPLE_RATE, default="8000"): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=["8000", "16000"],
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                ),
+                vol.Required(CONF_VAD_AGGRESSIVENESS, default=2): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=0,
+                        max=3,
+                        mode=selector.NumberSelectorMode.SLIDER,
+                    )
+                ),
+                vol.Required(CONF_SILENCE_TIMEOUT, default=1.5): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=0.5,
+                        max=5.0,
+                        step=0.5,
+                        mode=selector.NumberSelectorMode.SLIDER,
+                    )
+                ),
+            })
+
+            return self.async_show_form(
+                step_id="audio",
+                data_schema=data_schema,
+                description_placeholders={
+                    "name": "Audio Settings",
+                },
             )
-
-        data_schema = vol.Schema({
-            vol.Optional(CONF_ASSIST_PIPELINE, default=""): str,
-            vol.Required(CONF_CODEC, default=DEFAULT_CODEC): selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=["PCMU", "PCMA", "opus"],
-                    mode=selector.SelectSelectorMode.DROPDOWN,
-                )
-            ),
-            vol.Required(CONF_SAMPLE_RATE, default=DEFAULT_SAMPLE_RATE): selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=["8000", "16000"],
-                    mode=selector.SelectSelectorMode.DROPDOWN,
-                )
-            ),
-            vol.Required(CONF_VAD_AGGRESSIVENESS, default=DEFAULT_VAD_AGGRESSIVENESS): selector.NumberSelector(
-                selector.NumberSelectorConfig(
-                    min=0,
-                    max=3,
-                    mode=selector.NumberSelectorMode.SLIDER,
-                )
-            ),
-            vol.Required(CONF_SILENCE_TIMEOUT, default=DEFAULT_SILENCE_TIMEOUT): selector.NumberSelector(
-                selector.NumberSelectorConfig(
-                    min=0.5,
-                    max=5.0,
-                    step=0.5,
-                    mode=selector.NumberSelectorMode.SLIDER,
-                )
-            ),
-        })
-
-        return self.async_show_form(
-            step_id="audio",
-            data_schema=data_schema,
-            description_placeholders={
-                "name": "Audio Settings",
-            },
-        )
-
+        except Exception as e:
+            _LOGGER.error(f"Error in async_step_audio: {e}", exc_info=True)
+            raise
+    
     @staticmethod
     @callback
     def async_get_options_flow(
