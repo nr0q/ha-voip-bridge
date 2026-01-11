@@ -186,7 +186,7 @@ class VoipBridgeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             ),
             vol.Required(CONF_SAMPLE_RATE, default=DEFAULT_SAMPLE_RATE): selector.SelectSelector(
                 selector.SelectSelectorConfig(
-                    options=[8000, 16000],
+                    options=["8000", "16000"],
                     mode=selector.SelectSelectorMode.DROPDOWN,
                 )
             ),
