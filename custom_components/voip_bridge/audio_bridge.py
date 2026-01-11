@@ -1,16 +1,12 @@
-"""Audio processing and bridging for VoIP Bridge."""
-from __future__ import annotations
-
+"""Audio bridge for VoIP integration."""
 import asyncio
-import audioop
 import logging
-from collections import deque
-from typing import Callable
-
+from typing import Callable, Optional
 import numpy as np
-import webrtcvad_wheels
+from collections import deque
+import time
 
-from homeassistant.core import HomeAssistant
+from vad import EnergyVAD
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -18,336 +14,326 @@ _LOGGER = logging.getLogger(__name__)
 class AudioBuffer:
     """Circular buffer for audio data."""
     
-    def __init__(self, max_duration_ms: int = 3000, sample_rate: int = 8000) -> None:
+    def __init__(self, max_duration: float = 3.0, sample_rate: int = 8000):
         """Initialize audio buffer.
         
         Args:
-            max_duration_ms: Maximum buffer duration in milliseconds
+            max_duration: Maximum buffer duration in seconds
             sample_rate: Audio sample rate
         """
         self.sample_rate = sample_rate
-        self.max_samples = (max_duration_ms * sample_rate) // 1000
-        self._buffer: deque[bytes] = deque(maxlen=self.max_samples // 160)  # 20ms frames
-        self._lock = asyncio.Lock()
+        self.max_samples = int(max_duration * sample_rate)
+        self.buffer = deque(maxlen=self.max_samples)
     
-    async def add_frame(self, frame: bytes) -> None:
-        """Add audio frame to buffer."""
-        async with self._lock:
-            self._buffer.append(frame)
+    def add(self, audio_data: bytes):
+        """Add audio data to buffer.
+        
+        Args:
+            audio_data: Raw audio bytes (16-bit PCM)
+        """
+        # Convert bytes to int16 samples
+        samples = np.frombuffer(audio_data, dtype=np.int16)
+        self.buffer.extend(samples)
     
-    async def get_all(self) -> bytes:
-        """Get all buffered audio and clear."""
-        async with self._lock:
-            if not self._buffer:
-                return b''
-            audio = b''.join(self._buffer)
-            self._buffer.clear()
-            return audio
+    def get_all(self) -> np.ndarray:
+        """Get all buffered audio as numpy array."""
+        return np.array(self.buffer, dtype=np.int16)
     
-    async def clear(self) -> None:
-        """Clear buffer."""
-        async with self._lock:
-            self._buffer.clear()
-    
-    def get_duration_ms(self) -> int:
-        """Get current buffer duration in milliseconds."""
-        num_frames = len(self._buffer)
-        return num_frames * 20  # 20ms per frame
+    def clear(self):
+        """Clear the buffer."""
+        self.buffer.clear()
 
 
 class VoiceActivityDetector:
-    """Voice activity detection using WebRTC VAD."""
+    """Voice activity detection using energy-based VAD."""
     
-    def __init__(self, aggressiveness: int = 2, sample_rate: int = 8000) -> None:
+    def __init__(
+        self,
+        sample_rate: int = 8000,
+        energy_threshold: float = 0.05,
+        silence_timeout: float = 1.5,
+    ):
         """Initialize VAD.
         
         Args:
-            aggressiveness: VAD aggressiveness (0-3)
             sample_rate: Audio sample rate
+            energy_threshold: Energy threshold for speech detection
+            silence_timeout: Seconds of silence before ending speech
         """
         self.sample_rate = sample_rate
-        self.vad = webrtcvad.Vad(aggressiveness)
-        self._speech_frames = 0
-        self._silence_frames = 0
-        self._is_speech = False
+        self.silence_timeout = silence_timeout
+        
+        # Initialize EnergyVAD
+        self.vad = EnergyVAD(
+            sample_rate=sample_rate,
+            frame_length=25,  # ms
+            frame_shift=20,   # ms
+            energy_threshold=energy_threshold,
+            pre_emphasis=0.95,
+        )
+        
+        # State tracking
+        self.is_speaking = False
+        self.last_speech_time = 0
+        self.speech_buffer = []
     
-    def process_frame(self, frame: bytes, frame_duration_ms: int = 20) -> tuple[bool, bool]:
-        """Process audio frame and detect voice activity.
+    def process_audio(self, audio_data: bytes) -> tuple[bool, Optional[bytes]]:
+        """Process audio chunk and detect voice activity.
         
         Args:
-            frame: Audio frame (PCM16)
-            frame_duration_ms: Frame duration in milliseconds
+            audio_data: Raw audio bytes (16-bit PCM)
             
         Returns:
-            Tuple of (is_speech, speech_ended)
-            - is_speech: True if current frame contains speech
-            - speech_ended: True if speech segment just ended
+            Tuple of (is_speech_detected, completed_speech_audio)
+            completed_speech_audio is None unless speech segment just ended
         """
-        try:
-            is_speech = self.vad.is_speech(frame, self.sample_rate)
-        except Exception as e:
-            _LOGGER.warning(f"VAD error: {e}")
-            return False, False
+        # Convert to numpy array
+        samples = np.frombuffer(audio_data, dtype=np.int16)
         
-        speech_ended = False
+        # Run VAD on this chunk
+        # VAD expects float32 normalized to [-1, 1]
+        normalized = samples.astype(np.float32) / 32768.0
+        voice_activity = self.vad(normalized)
         
-        if is_speech:
-            self._speech_frames += 1
-            self._silence_frames = 0
+        # Check if any frames in this chunk contain speech
+        has_speech = np.any(voice_activity)
+        current_time = time.time()
+        
+        if has_speech:
+            # Speech detected
+            self.last_speech_time = current_time
             
-            # Start of speech detected
-            if not self._is_speech and self._speech_frames >= 3:
-                self._is_speech = True
+            if not self.is_speaking:
+                # Start of new speech segment
                 _LOGGER.debug("Speech started")
-        else:
-            self._silence_frames += 1
+                self.is_speaking = True
+                self.speech_buffer = []
             
-            # End of speech detected (150ms of silence after speech)
-            if self._is_speech and self._silence_frames >= 8:  # 160ms
-                self._is_speech = False
-                self._speech_frames = 0
-                speech_ended = True
-                _LOGGER.debug("Speech ended")
+            # Add to speech buffer
+            self.speech_buffer.append(audio_data)
+            return True, None
         
-        return self._is_speech, speech_ended
+        elif self.is_speaking:
+            # Currently in speech, but this chunk is silence
+            silence_duration = current_time - self.last_speech_time
+            
+            # Add to buffer (capture trailing silence)
+            self.speech_buffer.append(audio_data)
+            
+            if silence_duration >= self.silence_timeout:
+                # End of speech segment
+                _LOGGER.debug(f"Speech ended after {silence_duration:.2f}s silence")
+                self.is_speaking = False
+                
+                # Combine all buffered audio
+                complete_audio = b''.join(self.speech_buffer)
+                self.speech_buffer = []
+                
+                return False, complete_audio
+            
+            return True, None  # Still in speech segment, waiting for timeout
+        
+        else:
+            # Not speaking, no speech detected
+            return False, None
     
-    def reset(self) -> None:
+    def reset(self):
         """Reset VAD state."""
-        self._speech_frames = 0
-        self._silence_frames = 0
-        self._is_speech = False
+        self.is_speaking = False
+        self.last_speech_time = 0
+        self.speech_buffer = []
 
 
 class AudioCodec:
     """Audio codec conversion utilities."""
     
     @staticmethod
-    def ulaw_to_pcm16(data: bytes) -> bytes:
-        """Convert μ-law to PCM16."""
-        return audioop.ulaw2lin(data, 2)
-    
-    @staticmethod
-    def pcm16_to_ulaw(data: bytes) -> bytes:
-        """Convert PCM16 to μ-law."""
-        return audioop.lin2ulaw(data, 2)
-    
-    @staticmethod
-    def alaw_to_pcm16(data: bytes) -> bytes:
-        """Convert A-law to PCM16."""
-        return audioop.alaw2lin(data, 2)
-    
-    @staticmethod
-    def pcm16_to_alaw(data: bytes) -> bytes:
-        """Convert PCM16 to A-law."""
-        return audioop.lin2alaw(data, 2)
-    
-    @staticmethod
-    def resample(data: bytes, from_rate: int, to_rate: int, channels: int = 1) -> bytes:
-        """Resample audio data."""
-        if from_rate == to_rate:
-            return data
+    def pcm_to_mulaw(pcm_data: bytes) -> bytes:
+        """Convert 16-bit PCM to μ-law (PCMU).
         
-        # Convert to numpy array
-        samples = np.frombuffer(data, dtype=np.int16)
+        Args:
+            pcm_data: 16-bit PCM audio data
+            
+        Returns:
+            μ-law encoded audio data
+        """
+        # Convert bytes to int16 array
+        samples = np.frombuffer(pcm_data, dtype=np.int16)
         
-        # Calculate new length
-        new_length = int(len(samples) * to_rate / from_rate)
+        # Normalize to [-1, 1]
+        normalized = samples.astype(np.float32) / 32768.0
         
-        # Resample using linear interpolation
-        resampled = np.interp(
-            np.linspace(0, len(samples), new_length),
-            np.arange(len(samples)),
-            samples
-        ).astype(np.int16)
+        # Apply μ-law companding
+        mu = 255.0
+        sign = np.sign(normalized)
+        abs_val = np.abs(normalized)
+        compressed = sign * np.log(1 + mu * abs_val) / np.log(1 + mu)
         
-        return resampled.tobytes()
+        # Scale to [0, 255]
+        mulaw = ((compressed + 1) / 2 * 255).astype(np.uint8)
+        
+        return mulaw.tobytes()
     
     @staticmethod
-    def adjust_volume(data: bytes, factor: float) -> bytes:
-        """Adjust audio volume."""
-        if factor == 1.0:
-            return data
-        return audioop.mul(data, 2, factor)
+    def mulaw_to_pcm(mulaw_data: bytes) -> bytes:
+        """Convert μ-law (PCMU) to 16-bit PCM.
+        
+        Args:
+            mulaw_data: μ-law encoded audio data
+            
+        Returns:
+            16-bit PCM audio data
+        """
+        # Convert bytes to uint8 array
+        mulaw = np.frombuffer(mulaw_data, dtype=np.uint8)
+        
+        # Normalize to [-1, 1]
+        normalized = (mulaw.astype(np.float32) / 255.0) * 2 - 1
+        
+        # Apply μ-law expansion
+        mu = 255.0
+        sign = np.sign(normalized)
+        abs_val = np.abs(normalized)
+        expanded = sign * (np.power(1 + mu, abs_val) - 1) / mu
+        
+        # Scale to int16
+        pcm = (expanded * 32768).astype(np.int16)
+        
+        return pcm.tobytes()
 
 
 class AudioBridge:
-    """Bridge between SIP audio and Home Assistant Assist."""
+    """Bridge between SIP audio and Home Assistant."""
     
     def __init__(
         self,
-        hass: HomeAssistant,
+        hass,
         sample_rate: int = 8000,
         codec: str = "PCMU",
-        vad_aggressiveness: int = 2,
+        energy_threshold: float = 0.05,
         silence_timeout: float = 1.5,
-    ) -> None:
-        """Initialize audio bridge."""
+    ):
+        """Initialize audio bridge.
+        
+        Args:
+            hass: Home Assistant instance
+            sample_rate: Audio sample rate (8000 for PCMU/PCMA)
+            codec: Audio codec (PCMU or PCMA)
+            energy_threshold: VAD energy threshold
+            silence_timeout: Seconds of silence before ending speech
+        """
         self.hass = hass
         self.sample_rate = sample_rate
         self.codec = codec
-        self.silence_timeout = silence_timeout
         
-        # Audio processing
-        self._inbound_buffer = AudioBuffer(max_duration_ms=5000, sample_rate=sample_rate)
-        self._outbound_queue: asyncio.Queue[bytes] = asyncio.Queue()
-        self._vad = VoiceActivityDetector(vad_aggressiveness, sample_rate)
-        self._codec_converter = AudioCodec()
+        # Initialize VAD
+        self.vad = VoiceActivityDetector(
+            sample_rate=sample_rate,
+            energy_threshold=energy_threshold,
+            silence_timeout=silence_timeout,
+        )
         
-        # State
-        self._is_processing = False
-        self._silence_start: float | None = None
-        self._speech_detected = False
+        # Audio buffers
+        self.inbound_buffer = AudioBuffer(max_duration=3.0, sample_rate=sample_rate)
+        self.outbound_buffer = AudioBuffer(max_duration=10.0, sample_rate=sample_rate)
         
         # Callbacks
-        self._on_speech_complete_cb: Callable[[bytes], None] | None = None
+        self._speech_complete_callback: Optional[Callable] = None
+        
+        _LOGGER.info(
+            f"Audio bridge initialized: {sample_rate}Hz, codec={codec}, "
+            f"threshold={energy_threshold}, timeout={silence_timeout}s"
+        )
     
-    def set_speech_complete_callback(self, callback: Callable[[bytes], None]) -> None:
-        """Set callback for when speech segment completes."""
-        self._on_speech_complete_cb = callback
-    
-    async def process_inbound_audio(self, audio_data: bytes) -> None:
-        """Process audio received from SIP call.
+    def set_speech_complete_callback(self, callback: Callable):
+        """Set callback for when speech segment completes.
         
         Args:
-            audio_data: Raw audio from SIP (codec-encoded)
+            callback: Async function to call with completed audio (bytes)
         """
-        # Convert from codec to PCM16
-        if self.codec == "PCMU":
-            pcm_data = self._codec_converter.ulaw_to_pcm16(audio_data)
-        elif self.codec == "PCMA":
-            pcm_data = self._codec_converter.alaw_to_pcm16(audio_data)
-        elif self.codec == "opus":
-            # TODO: Implement Opus decoding
-            pcm_data = audio_data
-        else:
-            pcm_data = audio_data
-        
-        # Add to buffer
-        await self._inbound_buffer.add_frame(pcm_data)
-        
-        # Process with VAD
-        is_speech, speech_ended = self._vad.process_frame(pcm_data)
-        
-        if is_speech:
-            self._speech_detected = True
-            self._silence_start = None
-        elif self._speech_detected and not is_speech:
-            # Track silence duration
-            if self._silence_start is None:
-                self._silence_start = asyncio.get_event_loop().time()
-            
-            # Check if silence timeout reached
-            silence_duration = asyncio.get_event_loop().time() - self._silence_start
-            if silence_duration >= self.silence_timeout or speech_ended:
-                await self._handle_speech_complete()
+        self._speech_complete_callback = callback
     
-    async def _handle_speech_complete(self) -> None:
-        """Handle completion of speech segment."""
-        if not self._speech_detected:
-            return
-        
-        # Get all buffered audio
-        audio_data = await self._inbound_buffer.get_all()
-        
-        if len(audio_data) > 0 and self._on_speech_complete_cb:
-            _LOGGER.debug(f"Speech complete, {len(audio_data)} bytes")
-            
-            # Call callback with PCM16 audio
-            if asyncio.iscoroutinefunction(self._on_speech_complete_cb):
-                await self._on_speech_complete_cb(audio_data)
-            else:
-                self._on_speech_complete_cb(audio_data)
-        
-        # Reset state
-        self._speech_detected = False
-        self._silence_start = None
-        self._vad.reset()
-    
-    async def queue_outbound_audio(self, audio_data: bytes, sample_rate: int = 16000) -> None:
-        """Queue audio to send to caller (from TTS).
+    async def process_inbound_audio(self, audio_data: bytes):
+        """Process incoming audio from call.
         
         Args:
-            audio_data: PCM16 audio data
-            sample_rate: Sample rate of audio data
+            audio_data: Raw audio data (codec-encoded)
         """
-        # Resample if needed
-        if sample_rate != self.sample_rate:
-            audio_data = self._codec_converter.resample(
-                audio_data,
-                sample_rate,
-                self.sample_rate
-            )
-        
-        # Convert to codec
+        # Decode from codec to PCM16
         if self.codec == "PCMU":
-            encoded = self._codec_converter.pcm16_to_ulaw(audio_data)
-        elif self.codec == "PCMA":
-            encoded = self._codec_converter.pcm16_to_alaw(audio_data)
-        elif self.codec == "opus":
-            # TODO: Implement Opus encoding
-            encoded = audio_data
+            pcm_data = AudioCodec.mulaw_to_pcm(audio_data)
         else:
-            encoded = audio_data
+            # Assume already PCM
+            pcm_data = audio_data
         
-        # Split into 20ms frames and queue
-        frame_size = (self.sample_rate * 20) // 1000  # 20ms frame
-        bytes_per_frame = frame_size * 2  # 16-bit samples
+        # Run VAD
+        is_speech, completed_audio = self.vad.process_audio(pcm_data)
         
-        for i in range(0, len(encoded), bytes_per_frame):
-            frame = encoded[i:i + bytes_per_frame]
-            if len(frame) < bytes_per_frame:
-                # Pad last frame with silence
-                frame += b'\x00' * (bytes_per_frame - len(frame))
-            await self._outbound_queue.put(frame)
+        # If speech segment completed, trigger callback
+        if completed_audio and self._speech_complete_callback:
+            await self._speech_complete_callback(completed_audio)
     
-    def get_outbound_frame(self, size: int) -> bytes | None:
-        """Get next outbound audio frame (called from SIP thread).
+    async def queue_outbound_audio(self, audio_data: bytes):
+        """Queue audio for outbound transmission.
         
         Args:
-            size: Requested frame size in bytes
+            audio_data: PCM16 audio data to send
+        """
+        # Add to outbound buffer
+        self.outbound_buffer.add(audio_data)
+    
+    def get_outbound_frame(self, size: int) -> Optional[bytes]:
+        """Get next outbound audio frame.
+        
+        Args:
+            size: Number of samples needed
             
         Returns:
-            Audio frame or None if no audio available
+            Codec-encoded audio frame, or None if no audio available
         """
-        try:
-            # Non-blocking get
-            return self._outbound_queue.get_nowait()
-        except asyncio.QueueEmpty:
+        # Get samples from buffer
+        all_samples = self.outbound_buffer.get_all()
+        
+        if len(all_samples) < size:
+            # Not enough audio
             return None
+        
+        # Extract frame
+        frame_samples = all_samples[:size]
+        
+        # Remove from buffer (convert back to deque operations)
+        for _ in range(size):
+            if len(self.outbound_buffer.buffer) > 0:
+                self.outbound_buffer.buffer.popleft()
+        
+        # Encode to codec
+        pcm_bytes = frame_samples.tobytes()
+        
+        if self.codec == "PCMU":
+            return AudioCodec.pcm_to_mulaw(pcm_bytes)
+        else:
+            return pcm_bytes
     
-    async def clear_buffers(self) -> None:
+    async def clear_buffers(self):
         """Clear all audio buffers."""
-        await self._inbound_buffer.clear()
-        
-        # Clear outbound queue
-        while not self._outbound_queue.empty():
-            try:
-                self._outbound_queue.get_nowait()
-            except asyncio.QueueEmpty:
-                break
-        
-        self._vad.reset()
-        self._speech_detected = False
-        self._silence_start = None
+        self.inbound_buffer.clear()
+        self.outbound_buffer.clear()
+        self.vad.reset()
     
-    async def play_tone(self, frequency: int = 440, duration_ms: int = 200) -> None:
-        """Generate and queue a simple tone.
+    async def play_tone(self, frequency: int = 440, duration: float = 0.2):
+        """Play a simple tone (for acknowledgments).
         
         Args:
             frequency: Tone frequency in Hz
-            duration_ms: Duration in milliseconds
+            duration: Tone duration in seconds
         """
-        num_samples = (self.sample_rate * duration_ms) // 1000
-        t = np.linspace(0, duration_ms / 1000, num_samples)
-        
         # Generate sine wave
-        samples = np.sin(2 * np.pi * frequency * t)
+        num_samples = int(self.sample_rate * duration)
+        t = np.linspace(0, duration, num_samples, False)
+        tone = np.sin(2 * np.pi * frequency * t)
         
-        # Convert to int16
-        samples = (samples * 32767 * 0.3).astype(np.int16)  # 30% volume
+        # Scale to int16
+        tone_int16 = (tone * 32767 * 0.3).astype(np.int16)  # 30% volume
         
-        await self.queue_outbound_audio(samples.tobytes(), self.sample_rate)
-    
-    async def play_dtmf_acknowledgment(self) -> None:
-        """Play short beep to acknowledge DTMF input."""
-        await self.play_tone(800, 100)
+        # Queue for output
+        await self.queue_outbound_audio(tone_int16.tobytes())
