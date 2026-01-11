@@ -1,0 +1,62 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "FreePBX Connection",
+        "description": "Configure connection to your FreePBX server",
+        "data": {
+          "sip_server": "FreePBX IP Address",
+          "sip_port": "SIP Port",
+          "sip_username": "SIP Username",
+          "sip_password": "SIP Password",
+          "sip_extension": "Extension Number"
+        }
+      },
+      "security": {
+        "title": "Security Settings",
+        "description": "Configure PIN authentication",
+        "data": {
+          "require_pin_internal": "Require PIN for internal calls",
+          "require_pin_external": "Require PIN for external calls",
+          "pin": "PIN Code",
+          "trusted_caller_ids": "Trusted Caller IDs (comma-separated)"
+        }
+      },
+      "outbound": {
+        "title": "Outbound Destinations",
+        "description": "Phone numbers to call for alerts (one per line, first has priority)",
+        "data": {
+          "outbound_destinations": "Phone Numbers"
+        }
+      },
+      "audio": {
+        "title": "Audio & Assist Settings",
+        "description": "Configure audio codec and voice assistant",
+        "data": {
+          "assist_pipeline_id": "Assist Pipeline ID (optional)",
+          "codec": "Audio Codec",
+          "sample_rate": "Sample Rate (Hz)",
+          "vad_aggressiveness": "VAD Aggressiveness (0-3)",
+          "silence_timeout": "Silence Timeout (seconds)"
+        }
+      }
+    },
+    "error": {
+      "invalid_host": "Invalid hostname or IP address",
+      "cannot_connect": "Failed to connect to FreePBX",
+      "invalid_auth": "Invalid authentication credentials"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "VoIP Bridge Options",
+        "data": {
+          "require_pin_internal": "Require PIN for internal calls",
+          "require_pin_external": "Require PIN for external calls",
+          "pin": "PIN Code"
+        }
+      }
+    }
+  }
+}

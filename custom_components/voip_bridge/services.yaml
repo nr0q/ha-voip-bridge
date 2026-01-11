@@ -1,0 +1,57 @@
+add_event:
+  name: Add Event
+  description: Add an event to the outbound call queue
+  fields:
+    event_id:
+      name: Event ID
+      description: Unique identifier for this event
+      required: true
+      example: "generator_running_12345"
+      selector:
+        text:
+    priority:
+      name: Priority
+      description: Event priority (1=critical, 2=warning, 3=info)
+      required: true
+      default: 2
+      selector:
+        number:
+          min: 1
+          max: 3
+    message:
+      name: Message
+      description: Message to speak when presenting this event
+      required: true
+      example: "Generator is running"
+      selector:
+        text:
+
+clear_event:
+  name: Clear Event
+  description: Clear a specific event from the queue
+  fields:
+    event_id:
+      name: Event ID
+      description: ID of event to clear
+      required: true
+      selector:
+        text:
+
+clear_all_events:
+  name: Clear All Events
+  description: Clear all events from the queue
+
+trigger_call:
+  name: Trigger Outbound Call
+  description: Force an outbound call even if threshold not met
+  fields:
+    force:
+      name: Force
+      description: Force call even if no events pending
+      default: false
+      selector:
+        boolean:
+
+list_events:
+  name: List Events
+  description: Get list of active events in queue
