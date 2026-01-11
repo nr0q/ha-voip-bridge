@@ -121,7 +121,14 @@ class VoipBridgeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             # Parse destinations from text input
             destinations = []
-            for idx, line in enumerate(user_input[CONF_OUTBOUND_DESTINATIONS].split("\n")):
+            
+            destinations_input = user_input[CONF_OUTBOUND_DESTINATIONS]
+            if isinstance(destinations_input, str):
+                lines = destinations_input.split("\n")
+            else:
+                lines = destinations_input  # Already a list
+            
+            for idx, line in enumerate(lines):
                 line = line.strip()
                 if line:
                     destinations.append({
@@ -162,7 +169,7 @@ class VoipBridgeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         try:
             if user_input is not None:
                 self._data.update(user_input)
-            
+                
                 # Parse trusted caller IDs into list
                 if CONF_TRUSTED_CALLER_IDS in self._data:
                     caller_ids = self._data[CONF_TRUSTED_CALLER_IDS]
@@ -170,7 +177,7 @@ class VoipBridgeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         self._data[CONF_TRUSTED_CALLER_IDS] = [
                             cid.strip() for cid in caller_ids.split(",") if cid.strip()
                         ]
-
+                
                 # Create entry
                 return self.async_create_entry(
                     title=f"VoIP Bridge ({self._data[CONF_SIP_EXTENSION]})",
@@ -218,7 +225,7 @@ class VoipBridgeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         except Exception as e:
             _LOGGER.error(f"Error in async_step_audio: {e}", exc_info=True)
             raise
-    
+
     @staticmethod
     @callback
     def async_get_options_flow(
