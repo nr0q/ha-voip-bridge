@@ -1,0 +1,5 @@
+{
+  "name": "VoIP Bridge for Assist",
+  "render_readme": true,
+  "domains": ["voip_bridge"]
+}
