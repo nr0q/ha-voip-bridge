@@ -104,7 +104,7 @@ class VoIPBridgeCoordinator:
             username=self.entry.data[CONF_SIP_USERNAME],
             password=self.entry.data[CONF_SIP_PASSWORD],
             extension=self.entry.data[CONF_SIP_EXTENSION],
-            sample_rate=self.entry.data.get(CONF_SAMPLE_RATE, DEFAULT_SAMPLE_RATE),
+            sample_rate=int(self.entry.data.get(CONF_SAMPLE_RATE, DEFAULT_SAMPLE_RATE)),
         )
         
         # Set up SIP callbacks
