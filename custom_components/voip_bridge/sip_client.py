@@ -144,6 +144,7 @@ class VoIPBridgePhone:
         
         # Extract caller info
         caller_uri = call.request.headers['From']['uri']
+        _LOGGER.info(f"Caller URI: {caller_uri}")
         
         # Answer the call
         try:
@@ -158,6 +159,7 @@ class VoIPBridgePhone:
                 daemon=True
             )
             self._audio_thread.start()
+            _LOGGER.info("Audio thread started")
             
             # Notify via async callback
             if self._on_incoming_call:
@@ -165,12 +167,14 @@ class VoIPBridgePhone:
                     self._on_incoming_call(caller_uri),
                     self.hass.loop
                 )
+            _LOGGER.info("on_incoming_call callback queued")
             
             if self._on_call_established:
                 asyncio.run_coroutine_threadsafe(
                     self._on_call_established(),
                     self.hass.loop
                 )
+            _LOGGER.info("on_call_established callback queued")
             
             # DON'T BLOCK - return immediately so pyVoIP can process RTP
             
