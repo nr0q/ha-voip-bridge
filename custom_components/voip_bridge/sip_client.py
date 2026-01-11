@@ -172,14 +172,12 @@ class VoIPBridgePhone:
                     self.hass.loop
                 )
             
-            # Wait for call to end
-            call.state.wait_for_state(CallState.ENDED)
+            # DON'T BLOCK - return immediately so pyVoIP can process RTP
             
         except InvalidStateError as e:
             _LOGGER.error(f"Invalid call state: {e}")
-        
-        finally:
-            # Notify call ended
+            
+            # Notify call ended on error
             if self._on_call_ended:
                 asyncio.run_coroutine_threadsafe(
                     self._on_call_ended(),
@@ -232,6 +230,16 @@ class VoIPBridgePhone:
         
         finally:
             _LOGGER.info("Audio loop ended")
+            
+            # Notify call ended
+            if self._on_call_ended:
+                asyncio.run_coroutine_threadsafe(
+                    self._on_call_ended(),
+                    self.hass.loop
+                )
+            
+            self.current_call = None
+            self._stop_audio.set()
     
     def make_call(self, number: str):
         """Initiate outbound call.
