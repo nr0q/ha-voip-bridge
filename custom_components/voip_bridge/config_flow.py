@@ -228,12 +228,9 @@ class VoipBridgeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     @staticmethod
     @callback
-    def async_get_options_flow(
-        config_entry: config_entries.ConfigEntry,
-    ) -> config_entries.OptionsFlow:
+    def async_get_options_flow(config_entry: config_entries.ConfigEntry) -> config_entries.OptionsFlow:
         """Get the options flow for this handler."""
-        return VoipBridgeOptionsFlowHandler(config_entry)
-
+        return VoipBridgeOptionsFlowHandler()
 
 class VoipBridgeOptionsFlowHandler(config_entries.OptionsFlow):
     """Handle options flow for VoIP Bridge."""
