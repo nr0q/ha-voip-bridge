@@ -1,384 +1,375 @@
-"""SIP client wrapper using PJSUA2."""
-from __future__ import annotations
-
+"""SIP client using pyVoIP for VoIP Bridge integration."""
 import asyncio
 import logging
+from typing import Callable, Optional
 import threading
-from typing import Callable
 
-import pjsua2 as pj
-
-from homeassistant.core import HomeAssistant
+from pyVoIP.VoIP import VoIPPhone, CallState, InvalidStateError
 
 _LOGGER = logging.getLogger(__name__)
 
 
-class SIPAccount(pj.Account):
-    """PJSIP Account handler."""
-    
-    def __init__(self, sip_client: SIPClient) -> None:
-        """Initialize account."""
-        super().__init__()
-        self.sip_client = sip_client
-    
-    def onRegState(self, prm: pj.OnRegStateParam) -> None:
-        """Handle registration state changes."""
-        info = self.getInfo()
-        status = info.regStatus
-        
-        if status == pj.PJSIP_SC_OK:
-            _LOGGER.info(f"SIP registration successful: {info.uri}")
-            self.sip_client._on_registration_changed(True)
-        else:
-            _LOGGER.warning(f"SIP registration failed: {status} - {info.regStatusText}")
-            self.sip_client._on_registration_changed(False)
-    
-    def onIncomingCall(self, prm: pj.OnIncomingCallParam) -> None:
-        """Handle incoming call."""
-        call = SIPCall(self.sip_client, self, prm.callId)
-        call_info = call.getInfo()
-        
-        _LOGGER.info(f"Incoming call from {call_info.remoteUri}")
-        self.sip_client._on_incoming_call(call, call_info)
-
-
-class SIPCall(pj.Call):
-    """PJSIP Call handler."""
-    
-    def __init__(self, sip_client: SIPClient, account: SIPAccount, call_id: int = pj.PJSUA_INVALID_ID) -> None:
-        """Initialize call."""
-        super().__init__(account, call_id)
-        self.sip_client = sip_client
-        self.audio_media: pj.AudioMedia | None = None
-    
-    def onCallState(self, prm: pj.OnCallStateParam) -> None:
-        """Handle call state changes."""
-        info = self.getInfo()
-        state = info.state
-        
-        _LOGGER.debug(f"Call state: {state} ({info.stateText})")
-        
-        if state == pj.PJSIP_INV_STATE_DISCONNECTED:
-            _LOGGER.info("Call disconnected")
-            self.sip_client._on_call_ended(self)
-        elif state == pj.PJSIP_INV_STATE_CONFIRMED:
-            _LOGGER.info("Call established")
-            self.sip_client._on_call_established(self)
-    
-    def onCallMediaState(self, prm: pj.OnCallMediaStateParam) -> None:
-        """Handle media state changes."""
-        info = self.getInfo()
-        
-        for mi in info.media:
-            if mi.type == pj.PJMEDIA_TYPE_AUDIO:
-                if mi.status == pj.PJSUA_CALL_MEDIA_ACTIVE:
-                    # Get the audio media
-                    self.audio_media = self.getAudioMedia(mi.index)
-                    _LOGGER.info("Audio media active")
-                    self.sip_client._on_media_active(self, self.audio_media)
-    
-    def onDtmfDigit(self, prm: pj.OnDtmfDigitParam) -> None:
-        """Handle DTMF digit received."""
-        digit = prm.digit
-        _LOGGER.debug(f"DTMF received: {digit}")
-        self.sip_client._on_dtmf_received(self, digit)
-
-
-class AudioFrameCallback(pj.AudioMediaPort):
-    """Custom audio media port for capturing/playing audio."""
-    
-    def __init__(self, sip_client: SIPClient, sample_rate: int = 8000) -> None:
-        """Initialize audio port."""
-        super().__init__()
-        self.sip_client = sip_client
-        self.sample_rate = sample_rate
-        self._createPort(
-            "voip_bridge_audio",
-            sample_rate,
-            1,  # channels
-            16,  # bits per sample
-            sample_rate * 20 // 1000,  # samples per frame (20ms)
-        )
-    
-    def onFrameRequested(self, frame: pj.MediaFrame) -> None:
-        """Called when system needs audio to play (outbound audio)."""
-        # Get audio from TTS queue
-        audio_data = self.sip_client._get_outbound_audio(frame.size)
-        if audio_data:
-            # Copy to frame buffer
-            frame.buf = audio_data
-            frame.size = len(audio_data)
-            frame.type = pj.PJMEDIA_FRAME_TYPE_AUDIO
-        else:
-            # Silence
-            frame.type = pj.PJMEDIA_FRAME_TYPE_NONE
-    
-    def onFrameReceived(self, frame: pj.MediaFrame) -> None:
-        """Called when audio received from call (inbound audio)."""
-        if frame.type == pj.PJMEDIA_FRAME_TYPE_AUDIO:
-            # Send audio to STT processor
-            audio_bytes = bytes(frame.buf[:frame.size])
-            self.sip_client._on_audio_received(audio_bytes)
-
-
-class SIPClient:
-    """SIP client wrapper."""
+class VoIPBridgePhone:
+    """Wrapper for pyVoIP phone with async callback support."""
     
     def __init__(
         self,
-        hass: HomeAssistant,
+        hass,
         server: str,
         port: int,
         username: str,
         password: str,
         extension: str,
+        my_ip: str,
         sample_rate: int = 8000,
-    ) -> None:
-        """Initialize SIP client."""
+    ):
+        """Initialize VoIP phone.
+        
+        Args:
+            hass: Home Assistant instance
+            server: SIP server address
+            port: SIP server port
+            username: SIP username
+            password: SIP password
+            extension: Extension number
+            my_ip: Local IP address for RTP
+            sample_rate: Audio sample rate (default 8000 for PCMU/PCMA)
+        """
         self.hass = hass
         self.server = server
         self.port = port
         self.username = username
         self.password = password
         self.extension = extension
+        self.my_ip = my_ip
         self.sample_rate = sample_rate
         
-        self._ep: pj.Endpoint | None = None
-        self._account: SIPAccount | None = None
-        self._current_call: SIPCall | None = None
-        self._audio_port: AudioFrameCallback | None = None
-        self._transport: pj.TransportConfig | None = None
+        # pyVoIP phone instance
+        self.phone: Optional[VoIPPhone] = None
         
-        self._registered = False
-        self._running = False
-        self._thread: threading.Thread | None = None
+        # Current active call
+        self.current_call = None
         
-        # Callbacks
-        self._on_incoming_call_cb: Callable | None = None
-        self._on_call_established_cb: Callable | None = None
-        self._on_call_ended_cb: Callable | None = None
-        self._on_audio_received_cb: Callable | None = None
-        self._on_dtmf_received_cb: Callable | None = None
-        self._get_outbound_audio_cb: Callable | None = None
+        # Callbacks (async coroutines)
+        self._on_incoming_call: Optional[Callable] = None
+        self._on_call_established: Optional[Callable] = None
+        self._on_call_ended: Optional[Callable] = None
+        self._on_audio_received: Optional[Callable] = None
+        self._on_dtmf_received: Optional[Callable] = None
+        self._get_outbound_audio: Optional[Callable] = None
+        
+        # Audio handling
+        self._audio_thread: Optional[threading.Thread] = None
+        self._stop_audio = threading.Event()
+        
+        _LOGGER.info(
+            f"VoIP phone initialized: {username}@{server}:{port} ext={extension}"
+        )
     
     def set_callbacks(
         self,
-        on_incoming_call: Callable | None = None,
-        on_call_established: Callable | None = None,
-        on_call_ended: Callable | None = None,
-        on_audio_received: Callable | None = None,
-        on_dtmf_received: Callable | None = None,
-        get_outbound_audio: Callable | None = None,
-    ) -> None:
-        """Set callback functions."""
-        self._on_incoming_call_cb = on_incoming_call
-        self._on_call_established_cb = on_call_established
-        self._on_call_ended_cb = on_call_ended
-        self._on_audio_received_cb = on_audio_received
-        self._on_dtmf_received_cb = on_dtmf_received
-        self._get_outbound_audio_cb = get_outbound_audio
-    
-    def start(self) -> None:
-        """Start SIP client in separate thread."""
-        if self._running:
-            _LOGGER.warning("SIP client already running")
-            return
+        on_incoming_call: Optional[Callable] = None,
+        on_call_established: Optional[Callable] = None,
+        on_call_ended: Optional[Callable] = None,
+        on_audio_received: Optional[Callable] = None,
+        on_dtmf_received: Optional[Callable] = None,
+        get_outbound_audio: Optional[Callable] = None,
+    ):
+        """Set callback functions for call events.
         
-        self._running = True
-        self._thread = threading.Thread(target=self._run_pjsip, daemon=True)
-        self._thread.start()
-        _LOGGER.info("SIP client thread started")
+        All callbacks should be async coroutines except get_outbound_audio
+        which is synchronous and returns bytes.
+        """
+        self._on_incoming_call = on_incoming_call
+        self._on_call_established = on_call_established
+        self._on_call_ended = on_call_ended
+        self._on_audio_received = on_audio_received
+        self._on_dtmf_received = on_dtmf_received
+        self._get_outbound_audio = get_outbound_audio
     
-    def _run_pjsip(self) -> None:
-        """Run PJSIP in dedicated thread."""
+    def start(self):
+        """Start the VoIP phone."""
         try:
-            # Create endpoint
-            self._ep = pj.Endpoint()
-            self._ep.libCreate()
+            # Create phone with callback
+            self.phone = VoIPPhone(
+                self.server,
+                self.port,
+                self.username,
+                self.password,
+                callCallback=self._handle_incoming_call_sync,
+                myIP=self.my_ip,
+                sipPort=5060,
+                rtpPortLow=10000,
+                rtpPortHigh=20000,
+            )
             
-            # Initialize endpoint
-            ep_cfg = pj.EpConfig()
-            ep_cfg.logConfig.level = 4
-            ep_cfg.logConfig.consoleLevel = 4
-            self._ep.libInit(ep_cfg)
-            
-            # Create UDP transport
-            transport_cfg = pj.TransportConfig()
-            transport_cfg.port = 0  # Any available port
-            self._transport = self._ep.transportCreate(pj.PJSIP_TRANSPORT_UDP, transport_cfg)
-            
-            # Start endpoint
-            self._ep.libStart()
-            _LOGGER.info("PJSIP endpoint started")
-            
-            # Create account
-            acc_cfg = pj.AccountConfig()
-            acc_cfg.idUri = f"sip:{self.username}@{self.server}"
-            acc_cfg.regConfig.registrarUri = f"sip:{self.server}:{self.port}"
-            
-            cred = pj.AuthCredInfo()
-            cred.scheme = "digest"
-            cred.realm = "*"
-            cred.username = self.username
-            cred.data = self.password
-            cred.dataType = pj.PJSIP_CRED_DATA_PLAIN_PASSWD
-            acc_cfg.sipConfig.authCreds.append(cred)
-            
-            self._account = SIPAccount(self)
-            self._account.create(acc_cfg)
-            _LOGGER.info(f"SIP account created for {self.extension}")
-            
-            # Create audio port
-            self._audio_port = AudioFrameCallback(self, self.sample_rate)
-            
-            # Keep thread alive
-            while self._running:
-                self._ep.libHandleEvents(50)  # 50ms timeout
+            self.phone.start()
+            _LOGGER.info("VoIP phone started successfully")
             
         except Exception as e:
-            _LOGGER.error(f"Error in PJSIP thread: {e}", exc_info=True)
+            _LOGGER.error(f"Failed to start VoIP phone: {e}")
+            raise
+    
+    def stop(self):
+        """Stop the VoIP phone."""
+        try:
+            if self.current_call:
+                try:
+                    self.current_call.hangup()
+                except InvalidStateError:
+                    pass
+            
+            if self.phone:
+                self.phone.stop()
+            
+            # Stop audio thread
+            self._stop_audio.set()
+            if self._audio_thread and self._audio_thread.is_alive():
+                self._audio_thread.join(timeout=2)
+            
+            _LOGGER.info("VoIP phone stopped")
+            
+        except Exception as e:
+            _LOGGER.error(f"Error stopping VoIP phone: {e}")
+    
+    def _handle_incoming_call_sync(self, call):
+        """Synchronous callback for incoming calls (called by pyVoIP).
+        
+        This bridges from pyVoIP's synchronous callback to our async system.
+        """
+        _LOGGER.info(f"Incoming call from {call.request.headers['From']}")
+        
+        # Store the call
+        self.current_call = call
+        
+        # Extract caller info
+        caller_uri = call.request.headers['From']['uri']
+        
+        # Answer the call
+        try:
+            call.answer()
+            _LOGGER.info("Call answered")
+            
+            # Start audio handling thread
+            self._stop_audio.clear()
+            self._audio_thread = threading.Thread(
+                target=self._audio_loop,
+                args=(call,),
+                daemon=True
+            )
+            self._audio_thread.start()
+            
+            # Notify via async callback
+            if self._on_incoming_call:
+                asyncio.run_coroutine_threadsafe(
+                    self._on_incoming_call(caller_uri),
+                    self.hass.loop
+                )
+            
+            if self._on_call_established:
+                asyncio.run_coroutine_threadsafe(
+                    self._on_call_established(),
+                    self.hass.loop
+                )
+            
+            # Wait for call to end
+            call.state.wait_for_state(CallState.ENDED)
+            
+        except InvalidStateError as e:
+            _LOGGER.error(f"Invalid call state: {e}")
+        
         finally:
-            self._cleanup()
+            # Notify call ended
+            if self._on_call_ended:
+                asyncio.run_coroutine_threadsafe(
+                    self._on_call_ended(),
+                    self.hass.loop
+                )
+            
+            self.current_call = None
+            self._stop_audio.set()
     
-    def _cleanup(self) -> None:
-        """Cleanup PJSIP resources."""
+    def _audio_loop(self, call):
+        """Audio handling loop (runs in separate thread).
+        
+        Handles bidirectional audio and DTMF detection.
+        """
+        _LOGGER.info("Audio loop started")
+        
         try:
-            if self._account:
-                self._account.delete()
-            if self._ep:
-                self._ep.libDestroy()
+            while not self._stop_audio.is_set() and call.state.state == CallState.ANSWERED:
+                # Get incoming audio (RTP packets)
+                try:
+                    audio_data = call.read_audio(length=160, blocking=False)  # 20ms at 8kHz
+                    
+                    if audio_data and self._on_audio_received:
+                        # Send to async handler
+                        asyncio.run_coroutine_threadsafe(
+                            self._on_audio_received(audio_data),
+                            self.hass.loop
+                        )
+                
+                except:
+                    pass  # No audio available
+                
+                # Get outgoing audio if callback provided
+                if self._get_outbound_audio:
+                    try:
+                        outbound = self._get_outbound_audio(160)  # 20ms at 8kHz
+                        if outbound:
+                            call.write_audio(outbound)
+                    except Exception as e:
+                        _LOGGER.error(f"Error writing audio: {e}")
+                
+                # Small sleep to prevent busy loop
+                asyncio.run_coroutine_threadsafe(
+                    asyncio.sleep(0.01),
+                    self.hass.loop
+                ).result()
+        
         except Exception as e:
-            _LOGGER.error(f"Error during cleanup: {e}")
+            _LOGGER.error(f"Error in audio loop: {e}")
+        
+        finally:
+            _LOGGER.info("Audio loop ended")
     
-    def stop(self) -> None:
-        """Stop SIP client."""
-        self._running = False
-        if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=5)
-        _LOGGER.info("SIP client stopped")
-    
-    def make_call(self, destination: str) -> None:
-        """Initiate outbound call."""
-        if not self._account:
-            _LOGGER.error("Cannot make call: account not initialized")
+    def make_call(self, number: str):
+        """Initiate outbound call.
+        
+        Args:
+            number: Phone number or SIP URI to call
+        """
+        if self.current_call:
+            _LOGGER.warning("Call already in progress")
             return
         
         try:
-            call = SIPCall(self, self._account)
-            call_prm = pj.CallOpParam()
-            call_prm.opt.audioCount = 1
-            call_prm.opt.videoCount = 0
+            _LOGGER.info(f"Making call to {number}")
+            call = self.phone.call(number)
+            self.current_call = call
             
-            dest_uri = f"sip:{destination}@{self.server}"
-            call.makeCall(dest_uri, call_prm)
-            self._current_call = call
+            # Wait for call to be answered
+            call.state.wait_for_state(CallState.ANSWERED)
             
-            _LOGGER.info(f"Initiating call to {destination}")
-        except Exception as e:
-            _LOGGER.error(f"Failed to make call: {e}", exc_info=True)
+            # Start audio thread
+            self._stop_audio.clear()
+            self._audio_thread = threading.Thread(
+                target=self._audio_loop,
+                args=(call,),
+                daemon=True
+            )
+            self._audio_thread.start()
+            
+            # Notify established
+            if self._on_call_established:
+                asyncio.run_coroutine_threadsafe(
+                    self._on_call_established(),
+                    self.hass.loop
+                )
+            
+            # Wait for call to end
+            call.state.wait_for_state(CallState.ENDED)
+            
+        except InvalidStateError as e:
+            _LOGGER.error(f"Call failed: {e}")
+        
+        finally:
+            if self._on_call_ended:
+                asyncio.run_coroutine_threadsafe(
+                    self._on_call_ended(),
+                    self.hass.loop
+                )
+            
+            self.current_call = None
+            self._stop_audio.set()
     
-    def answer_call(self) -> None:
-        """Answer incoming call."""
-        if self._current_call:
+    def hangup_call(self):
+        """Hang up current call."""
+        if self.current_call:
             try:
-                call_prm = pj.CallOpParam()
-                call_prm.statusCode = 200
-                self._current_call.answer(call_prm)
-                _LOGGER.info("Answered incoming call")
-            except Exception as e:
-                _LOGGER.error(f"Failed to answer call: {e}")
+                self.current_call.hangup()
+                _LOGGER.info("Call hung up")
+            except InvalidStateError:
+                pass
     
-    def hangup_call(self) -> None:
-        """Hangup current call."""
-        if self._current_call:
+    def send_dtmf(self, digit: str):
+        """Send DTMF digit.
+        
+        Args:
+            digit: DTMF digit (0-9, *, #, A-D)
+        """
+        if self.current_call:
             try:
-                call_prm = pj.CallOpParam()
-                self._current_call.hangup(call_prm)
-                _LOGGER.info("Hung up call")
-            except Exception as e:
-                _LOGGER.error(f"Failed to hangup call: {e}")
-    
-    def send_dtmf(self, digits: str) -> None:
-        """Send DTMF digits."""
-        if self._current_call:
-            try:
-                self._current_call.dialDtmf(digits)
-                _LOGGER.debug(f"Sent DTMF: {digits}")
+                self.current_call.send_dtmf(digit)
+                _LOGGER.debug(f"Sent DTMF: {digit}")
             except Exception as e:
                 _LOGGER.error(f"Failed to send DTMF: {e}")
+
+
+# Compatibility wrapper to match original interface
+class SIPClient:
+    """SIP client wrapper matching original interface."""
     
-    # Internal callback handlers (called from PJSIP thread)
-    def _on_registration_changed(self, registered: bool) -> None:
-        """Handle registration state change."""
-        self._registered = registered
+    def __init__(
+        self,
+        hass,
+        server: str,
+        port: int,
+        username: str,
+        password: str,
+        extension: str,
+        sample_rate: int = 8000,
+    ):
+        """Initialize SIP client."""
+        self.hass = hass
+        
+        # Auto-detect local IP
+        import socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect((server, port))
+            my_ip = s.getsockname()[0]
+        except:
+            my_ip = "0.0.0.0"
+        finally:
+            s.close()
+        
+        self.phone = VoIPBridgePhone(
+            hass,
+            server,
+            port,
+            username,
+            password,
+            extension,
+            my_ip,
+            sample_rate,
+        )
     
-    def _on_incoming_call(self, call: SIPCall, call_info: pj.CallInfo) -> None:
-        """Handle incoming call."""
-        self._current_call = call
-        if self._on_incoming_call_cb:
-            # Schedule callback in HA event loop
-            asyncio.run_coroutine_threadsafe(
-                self._on_incoming_call_cb(call_info.remoteUri),
-                self.hass.loop
-            )
+    def set_callbacks(self, **kwargs):
+        """Set callbacks."""
+        self.phone.set_callbacks(**kwargs)
     
-    def _on_call_established(self, call: SIPCall) -> None:
-        """Handle call established."""
-        if self._on_call_established_cb:
-            asyncio.run_coroutine_threadsafe(
-                self._on_call_established_cb(),
-                self.hass.loop
-            )
+    def start(self):
+        """Start SIP client."""
+        self.phone.start()
     
-    def _on_call_ended(self, call: SIPCall) -> None:
-        """Handle call ended."""
-        self._current_call = None
-        if self._on_call_ended_cb:
-            asyncio.run_coroutine_threadsafe(
-                self._on_call_ended_cb(),
-                self.hass.loop
-            )
+    def stop(self):
+        """Stop SIP client."""
+        self.phone.stop()
     
-    def _on_media_active(self, call: SIPCall, audio_media: pj.AudioMedia) -> None:
-        """Handle media becoming active."""
-        # Connect our audio port to the call
-        if self._audio_port:
-            try:
-                # Bidirectional audio
-                audio_media.startTransmit(self._audio_port)
-                self._audio_port.startTransmit(audio_media)
-                _LOGGER.info("Audio streams connected")
-            except Exception as e:
-                _LOGGER.error(f"Failed to connect audio: {e}")
+    def make_call(self, number: str):
+        """Make outbound call."""
+        # Run in executor since it's blocking
+        asyncio.get_event_loop().run_in_executor(
+            None,
+            self.phone.make_call,
+            number
+        )
     
-    def _on_audio_received(self, audio_data: bytes) -> None:
-        """Handle received audio data."""
-        if self._on_audio_received_cb:
-            asyncio.run_coroutine_threadsafe(
-                self._on_audio_received_cb(audio_data),
-                self.hass.loop
-            )
+    def hangup_call(self):
+        """Hang up call."""
+        self.phone.hangup_call()
     
-    def _on_dtmf_received(self, call: SIPCall, digit: str) -> None:
-        """Handle DTMF digit."""
-        if self._on_dtmf_received_cb:
-            asyncio.run_coroutine_threadsafe(
-                self._on_dtmf_received_cb(digit),
-                self.hass.loop
-            )
-    
-    def _get_outbound_audio(self, size: int) -> bytes | None:
-        """Get audio to send to caller."""
-        if self._get_outbound_audio_cb:
-            return self._get_outbound_audio_cb(size)
-        return None
-    
-    @property
-    def is_registered(self) -> bool:
-        """Check if registered to SIP server."""
-        return self._registered
-    
-    @property
-    def has_active_call(self) -> bool:
-        """Check if there's an active call."""
-        return self._current_call is not None
+    def send_dtmf(self, digit: str):
+        """Send DTMF."""
+        self.phone.send_dtmf(digit)
