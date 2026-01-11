@@ -7,6 +7,6 @@
   "documentation": "https://gitlab.com/NR0Q/ha-voip-bridge",
   "iot_class": "local_push",
   "issue_tracker": "https://gitlab.com/NR0Q/ha-voip-bridge/-/issues",
-  "requirements": ["pyVoIP>=1.6.8", "webrtcvad>=2.0.10", "numpy>=1.24.0"],
+  "requirements": ["pyVoIP>=1.6.8", "webrtcvad-wheels>=2.0.14", "numpy>=1.24.0"],
   "version": "0.1.1"
 }

@@ -8,7 +8,7 @@ from collections import deque
 from typing import Callable
 
 import numpy as np
-import webrtcvad
+import webrtcvad_wheels
 
 from homeassistant.core import HomeAssistant
 
