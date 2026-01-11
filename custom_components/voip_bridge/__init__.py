@@ -87,7 +87,7 @@ class VoIPBridgeCoordinator:
         # Initialize audio bridge
         self.audio_bridge = AudioBridge(
             self.hass,
-            sample_rate=self.entry.data.get(CONF_SAMPLE_RATE, DEFAULT_SAMPLE_RATE),
+            sample_rate=int(self.entry.data.get(CONF_SAMPLE_RATE, DEFAULT_SAMPLE_RATE)),
             codec=self.entry.data.get(CONF_CODEC, DEFAULT_CODEC),
             vad_aggressiveness=self.entry.data.get(CONF_VAD_AGGRESSIVENESS, DEFAULT_VAD_AGGRESSIVENESS),
             silence_timeout=self.entry.data.get(CONF_SILENCE_TIMEOUT, DEFAULT_SILENCE_TIMEOUT),
