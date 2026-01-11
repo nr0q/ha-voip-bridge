@@ -1,7 +1,7 @@
 {
   "domain": "voip_bridge",
   "name": "VoIP Bridge for Assist",
-  "documentation": "https://gitlab.com/nr0q/ha-voip-bridge",
+  "documentation": "https://gitlab.com/NR0Q/ha-voip-bridge",
   "codeowners": ["@yourusername"],
   "config_flow": true,
   "dependencies": ["assist_pipeline"],
