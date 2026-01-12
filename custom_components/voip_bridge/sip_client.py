@@ -228,7 +228,7 @@ class VoIPBridgePhone:
                 
                 # Small sleep to prevent busy loop
                 asyncio.run_coroutine_threadsafe(
-                    #asyncio.sleep(0.02),
+                    asyncio.sleep(0.001),
                     self.hass.loop
                 ).result()
         
