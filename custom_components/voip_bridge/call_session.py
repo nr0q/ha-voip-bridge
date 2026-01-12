@@ -95,7 +95,7 @@ class CallSession:
         
         if self.direction == "inbound":
             # Answer the call
-            self.sip_client.answer_call()
+            #self.sip_client.answer_call()
             await self.transition_to(CallState.RINGING)
         else:
             # Outbound call
