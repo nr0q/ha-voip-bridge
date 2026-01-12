@@ -327,7 +327,7 @@ class CallSession:
             speech_manager: SpeechManager = self.hass.data["tts_manager"]
 
             # Resolve the engine
-            engine = await async_resolve_engine(self.hass, "tts.piper")
+            engine = async_resolve_engine(self.hass, "tts.piper")
 
             # Get TTS audio
             extension, audio_bytes = await speech_manager.async_get_tts_audio(
