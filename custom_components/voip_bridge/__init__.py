@@ -162,6 +162,7 @@ class VoIPBridgeCoordinator:
     
     async def _on_audio_received(self, audio_data: bytes) -> None:
         """Handle audio received from call."""
+        _LOGGER.info(f"Received {len(audio_data)} bytes of audio")
         if self.current_session:
             await self.audio_bridge.process_inbound_audio(audio_data)
     
