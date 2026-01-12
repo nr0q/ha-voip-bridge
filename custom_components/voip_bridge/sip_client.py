@@ -221,12 +221,14 @@ class VoIPBridgePhone:
                         outbound = self._get_outbound_audio(160)  # 20ms at 8kHz
                         if outbound:
                             call.write_audio(outbound)
+                        else:
+                            _LOGGER.debug("No audio available")
                     except Exception as e:
                         _LOGGER.error(f"Error writing audio: {e}")
                 
                 # Small sleep to prevent busy loop
                 asyncio.run_coroutine_threadsafe(
-                    asyncio.sleep(0.02),
+                    #asyncio.sleep(0.02),
                     self.hass.loop
                 ).result()
         
