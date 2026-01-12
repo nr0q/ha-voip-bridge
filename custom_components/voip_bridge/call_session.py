@@ -321,24 +321,17 @@ class CallSession:
         _LOGGER.info(f"TTS: {text}")
 
         try:
-            # Get the TTS entity
-            from homeassistant.helpers import entity_registry
-            from homeassistant.components.tts import DOMAIN as TTS_DOMAIN
+            from homeassistant.components.tts import SpeechManager, async_resolve_engine
 
-            tts_entity_id = "tts.piper"
+            # Get the speech manager
+            speech_manager: SpeechManager = self.hass.data["tts_manager"]
 
-            # Get the entity object from the entity component
-            entity_comp = self.hass.data.get(TTS_DOMAIN)
-            if not entity_comp:
-                raise ValueError("TTS component not loaded")
+            # Resolve the engine
+            engine = await async_resolve_engine(self.hass, "tts.piper")
 
-            # Get the TTS entity
-            tts_entity = entity_comp.get_entity(tts_entity_id)
-            if not tts_entity:
-                raise ValueError(f"TTS entity {tts_entity_id} not found")
-
-            # Call async_get_tts_audio directly on the entity
-            extension, audio_bytes = await tts_entity.async_get_tts_audio(
+            # Get TTS audio
+            extension, audio_bytes = await speech_manager.async_get_tts_audio(
+                engine=engine,
                 message=text,
                 language="en-US",
                 options={},
@@ -351,8 +344,8 @@ class CallSession:
 
         except Exception as e:
             _LOGGER.error(f"TTS error: {e}", exc_info=True)
-            await self.audio_bridge.play_tone(440, 3.0)
-        
+            await self.audio_bridge.play_tone(880, 3.0)
+
     async def _handle_timeout(self) -> None:
         """Handle call timeout."""
         await asyncio.sleep(self.config.conversation_timeout)
