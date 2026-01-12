@@ -340,7 +340,7 @@ class AudioBridge:
         if self.codec == "PCMU":
             return AudioCodec.pcm_to_mulaw(pcm_bytes)
         elif self.codec == "PCMA":
-            return pcm_bytes
+            return AudioCodec.pcm_to_alaw(pcm_bytes)
         else:
             return pcm_bytes  # Raw PCM fallback
     
