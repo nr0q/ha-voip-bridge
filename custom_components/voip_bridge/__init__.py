@@ -162,7 +162,7 @@ class VoIPBridgeCoordinator:
     
     async def _on_audio_received(self, audio_data: bytes) -> None:
         """Handle audio received from call."""
-        _LOGGER.info(f"Received {len(audio_data)} bytes of audio")
+        # _LOGGER.info(f"Received {len(audio_data)} bytes of audio")
         if self.current_session:
             await self.audio_bridge.process_inbound_audio(audio_data)
     
@@ -178,6 +178,8 @@ class VoIPBridgeCoordinator:
     
     def _get_outbound_audio(self, size: int) -> bytes | None:
         """Get outbound audio frame."""
+        if audio:
+            _LOGGER.info(f"Sending {len(audio)} bytes to caller")
         return self.audio_bridge.get_outbound_frame(size)
     
     def _extract_caller_id(self, uri: str) -> str:

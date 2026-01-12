@@ -326,7 +326,8 @@ class CallSession:
         _LOGGER.info(f"TTS: {text}")
         
         # For now, play a tone as placeholder
-        await self.audio_bridge.play_tone(440, 500)
+        await self.audio_bridge.play_tone(440, 3.0)
+        _LOGGER.info("Tone queued for playback")
     
     async def _handle_timeout(self) -> None:
         """Handle call timeout."""

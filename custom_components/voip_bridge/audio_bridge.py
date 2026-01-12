@@ -259,7 +259,7 @@ class AudioBridge:
         Args:
             audio_data: Raw audio data (codec-encoded)
         """
-        _LOGGER.info(f"Processing {len(audio_data)} bytes")
+        # _LOGGER.info(f"Processing {len(audio_data)} bytes")
         # Decode from codec to PCM16
         if self.codec == "PCMU":
             pcm_data = AudioCodec.mulaw_to_pcm(audio_data)
