@@ -317,18 +317,35 @@ class CallSession:
         return "I'm sorry, Assist integration is not yet implemented."
     
     async def _speak(self, text: str) -> None:
-        """Convert text to speech and play to caller.
-        
-        Args:
-            text: Text to speak
-        """
-        # TODO: Implement TTS via Assist pipeline
+        """Convert text to speech and play to caller."""
         _LOGGER.info(f"TTS: {text}")
+
+        try:
+            # Call TTS service to generate audio
+            service_data = {
+                "entity_id": "tts.piper",
+                "message": text,
+            }
+
+            # This returns a media file path
+            response = await self.hass.services.async_call(
+                "tts",
+                "speak",
+                service_data,
+                blocking=True,
+                return_response=True,
+            )
+
+            _LOGGER.info(f"TTS response: {response}")
+
+            # TODO: Load the audio file and queue it
+            # For now, play tone
+            await self.audio_bridge.play_tone(440, 3.0)
+
+        except Exception as e:
+            _LOGGER.error(f"TTS error: {e}", exc_info=True)
+            await self.audio_bridge.play_tone(440, 3.0)
         
-        # For now, play a tone as placeholder
-        await self.audio_bridge.play_tone(440, 3.0)
-        _LOGGER.info("Tone queued for playback")
-    
     async def _handle_timeout(self) -> None:
         """Handle call timeout."""
         await asyncio.sleep(self.config.conversation_timeout)
