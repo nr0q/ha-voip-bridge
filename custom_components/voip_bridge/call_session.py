@@ -321,30 +321,28 @@ class CallSession:
         _LOGGER.info(f"TTS: {text}")
 
         try:
-            # Call TTS service to generate audio
-            service_data = {
-                "entity_id": "tts.piper",
-                "message": text,
-            }
-
-            # This returns a media file path
-            response = await self.hass.services.async_call(
-                "tts",
-                "speak",
-                service_data,
-                blocking=True,
-                return_response=True,
+            # Generate TTS
+            url = await tts.async_get_url(
+                self.hass,
+                engine="tts.piper",
+                message=text,
+                language="en",
+                options={},
             )
 
-            _LOGGER.info(f"TTS response: {response}")
+            _LOGGER.info(f"TTS URL: {url}")
 
-            # TODO: Load the audio file and queue it
-            # For now, play tone
-            await self.audio_bridge.play_tone(440, 3.0)
+            # Download the audio file
+            import aiohttp
+            async with aiohttp.ClientSession() as session:
+                async with session.get(f"http://localhost:8123{url}") as response:
+                    audio_data = await response.read()
+                    _LOGGER.info(f"Downloaded {len(audio_data)} bytes")
+
+                    # TODO: Convert from WAV/MP3 to PCM16 @ 8kHz
 
         except Exception as e:
             _LOGGER.error(f"TTS error: {e}", exc_info=True)
-            await self.audio_bridge.play_tone(440, 3.0)
         
     async def _handle_timeout(self) -> None:
         """Handle call timeout."""
