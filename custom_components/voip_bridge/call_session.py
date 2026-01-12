@@ -374,16 +374,17 @@ class CallSession:
 
             # Resample to 8000Hz
             if framerate != self.audio_bridge.sample_rate:
-                ratio = framerate / self.audio_bridge.sample_rate  # 22050 / 8000 = 2.75625
-                num_samples = int(len(audio_array) / ratio)
-                indices = (np.arange(num_samples) * ratio).astype(int)
-                audio_array = audio_array[indices]
-                #num_samples = int(len(audio_array) * self.audio_bridge.sample_rate / framerate)
-                #from scipy.interpolate import interp1d
-                #x_old = np.arange(len(audio_array))
-                #x_new = np.linspace(0, len(audio_array) - 1, num_samples)
-                #interpolator = interp1d(x_old, audio_array, kind='linear')
-                #audio_array = interpolator(x_new).astype(np.int16)
+                #ratio = framerate / self.audio_bridge.sample_rate  # 22050 / 8000 = 2.75625
+                #num_samples = int(len(audio_array) / ratio)
+                #indices = (np.arange(num_samples) * ratio).astype(int)
+                #audio_array = audio_array[indices]
+                num_samples = int(len(audio_array) * self.audio_bridge.sample_rate / framerate)
+                from scipy.interpolate import interp1d
+                x_old = np.arange(len(audio_array))
+                x_new = np.linspace(0, len(audio_array) - 1, num_samples)
+                interpolator = interp1d(x_old, audio_array, kind='linear')
+                audio_array = interpolator(x_new).astype(np.int16)
+                audio_array = np.repeat(audio_array, 2)
                 #audio_array = signal.resample(audio_array, num_samples).astype(np.int16)
                 _LOGGER.info(f"Resampled from {framerate}Hz to {self.audio_bridge.sample_rate}Hz")
 
