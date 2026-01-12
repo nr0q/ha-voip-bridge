@@ -144,7 +144,7 @@ class VoIPBridgePhone:
         _LOGGER.info("Call stored")
         
         # Extract caller info
-        caller_uri = call.request.headers['From']['uri']
+        caller_uri = call.request.headers['From']['number']
         _LOGGER.info(f"Caller URI: {caller_uri}")
             
         # Answer the call
