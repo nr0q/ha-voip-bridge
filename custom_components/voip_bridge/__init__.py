@@ -179,8 +179,8 @@ class VoIPBridgeCoordinator:
     def _get_outbound_audio(self, size: int) -> bytes | None:
         """Get outbound audio frame."""
         audio = self.audio_bridge.get_outbound_frame(size)
-        if audio:
-            _LOGGER.info(f"Sending {len(audio)} bytes to caller")
+        #if audio:
+        #    _LOGGER.info(f"Sending {len(audio)} bytes to caller")
         return self.audio_bridge.get_outbound_frame(size)
     
     def _extract_caller_id(self, uri: str) -> str:
