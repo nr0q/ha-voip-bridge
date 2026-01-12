@@ -315,33 +315,36 @@ class CallSession:
         # TODO: Implement Assist pipeline query
         _LOGGER.warning("Assist query not yet implemented")
         return "I'm sorry, Assist integration is not yet implemented."
-    
+
     async def _speak(self, text: str) -> None:
         """Convert text to speech and play to caller."""
         _LOGGER.info(f"TTS: {text}")
-
+        
         try:
-            from homeassistant.components.tts import SpeechManager, async_resolve_engine
-
-            # Get the speech manager
-            speech_manager: SpeechManager = self.hass.data["tts_manager"]
-
-            # Resolve the engine
-            engine = async_resolve_engine(self.hass, "tts.piper")
-
-            # Get TTS audio
-            extension, audio_bytes = await speech_manager.async_get_tts_audio(
-                engine=engine,
+            from homeassistant.helpers.entity_component import DATA_INSTANCES
+            
+            # Get the TTS entity component
+            entity_component = self.hass.data[DATA_INSTANCES].get("tts")
+            if not entity_component:
+                raise ValueError("TTS component not loaded")
+            
+            # Get the entity
+            entity = entity_component.get_entity("tts.piper")
+            if not entity:
+                raise ValueError("TTS entity tts.piper not found")
+            
+            # Call async_get_tts_audio on the entity
+            extension, audio_bytes = await entity.async_get_tts_audio(
                 message=text,
                 language="en-US",
                 options={},
             )
-
+            
             _LOGGER.info(f"Got TTS audio: {len(audio_bytes)} bytes, format: {extension}")
-
+            
             # TODO: Convert audio to PCM16 @ 8kHz and queue
             await self.audio_bridge.play_tone(440, 1.0)
-
+            
         except Exception as e:
             _LOGGER.error(f"TTS error: {e}", exc_info=True)
             await self.audio_bridge.play_tone(880, 3.0)
