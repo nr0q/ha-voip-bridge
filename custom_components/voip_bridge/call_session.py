@@ -321,31 +321,37 @@ class CallSession:
         _LOGGER.info(f"TTS: {text}")
 
         try:
-            from homeassistant.components import tts
-            # Generate TTS
-            url = await tts.async_get_url(
-                self.hass,
-                engine="tts.piper",
+            # Get the TTS entity
+            from homeassistant.helpers import entity_registry
+            from homeassistant.components.tts import DOMAIN as TTS_DOMAIN
+
+            tts_entity_id = "tts.piper"
+
+            # Get the entity object from the entity component
+            entity_comp = self.hass.data.get(TTS_DOMAIN)
+            if not entity_comp:
+                raise ValueError("TTS component not loaded")
+
+            # Get the TTS entity
+            tts_entity = entity_comp.get_entity(tts_entity_id)
+            if not tts_entity:
+                raise ValueError(f"TTS entity {tts_entity_id} not found")
+
+            # Call async_get_tts_audio directly on the entity
+            extension, audio_bytes = await tts_entity.async_get_tts_audio(
                 message=text,
-                language="en",
+                language="en-US",
                 options={},
             )
 
-            _LOGGER.info(f"TTS URL: {url}")
+            _LOGGER.info(f"Got TTS audio: {len(audio_bytes)} bytes, format: {extension}")
 
-            # Download the audio file
-            import aiohttp
-            async with aiohttp.ClientSession() as session:
-                async with session.get(f"http://localhost:8123{url}") as response:
-                    audio_data = await response.read()
-                    _LOGGER.info(f"Downloaded {len(audio_data)} bytes")
-
-                    # TODO: Convert from WAV/MP3 to PCM16 @ 8kHz
-                    await self.audio_bridge.play_tone(440, 1.0)
+            # TODO: Convert audio to PCM16 @ 8kHz and queue
+            await self.audio_bridge.play_tone(440, 1.0)
 
         except Exception as e:
             _LOGGER.error(f"TTS error: {e}", exc_info=True)
-            await self.audio_bridge.play_tone(880, 3.0)
+            await self.audio_bridge.play_tone(440, 3.0)
         
     async def _handle_timeout(self) -> None:
         """Handle call timeout."""
