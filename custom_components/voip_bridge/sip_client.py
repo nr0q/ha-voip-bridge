@@ -200,7 +200,7 @@ class VoIPBridgePhone:
         _LOGGER.info("Audio loop started")
         
         try:
-            while not self._stop_audio.is_set() and call.state.state == CallState.ANSWERED:
+            while not self._stop_audio.is_set() and call.state == CallState.ANSWERED:
                 # Get incoming audio (RTP packets)
                 try:
                     audio_data = call.read_audio(length=160, blocking=False)  # 20ms at 8kHz
