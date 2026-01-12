@@ -200,7 +200,32 @@ class AudioCodec:
         pcm = (expanded * 32768).astype(np.int16)
         
         return pcm.tobytes()
+    
+    @staticmethod
+    def pcm_to_alaw(pcm_data: bytes) -> bytes:
+        """Convert 16-bit PCM to A-law (PCMA).
+        
+        Args:
+            pcm_data: 16-bit PCM audio data
+            
+        Returns:
+            A-law encoded audio data
+        """
+        import audioop
+        return audioop.lin2alaw(pcm_data, 2)
 
+    @staticmethod
+    def alaw_to_pcm(alaw_data: bytes) -> bytes:
+        """Convert A-law (PCMA) to 16-bit PCM.
+        
+        Args:
+            alaw_data: A-law encoded audio data
+            
+        Returns:
+            16-bit PCM audio data
+        """
+        import audioop
+        return audioop.alaw2lin(alaw_data, 2)
 
 class AudioBridge:
     """Bridge between SIP audio and Home Assistant."""
@@ -263,6 +288,8 @@ class AudioBridge:
         # Decode from codec to PCM16
         if self.codec == "PCMU":
             pcm_data = AudioCodec.mulaw_to_pcm(audio_data)
+        elif self.codec == "PCMA":
+            pcm_data = AudioCodec.alaw_to_pcm(audio_data)
         else:
             # Assume already PCM
             pcm_data = audio_data
@@ -307,13 +334,15 @@ class AudioBridge:
             if len(self.outbound_buffer.buffer) > 0:
                 self.outbound_buffer.buffer.popleft()
         
-        # Encode to codec
+        # In get_outbound_frame():
         pcm_bytes = frame_samples.tobytes()
-        
+
         if self.codec == "PCMU":
             return AudioCodec.pcm_to_mulaw(pcm_bytes)
+        elif self.codec == "PCMA":
+            return AudioCodec.pcm_to_alaw(pcm_bytes)
         else:
-            return pcm_bytes
+            return pcm_bytes  # Raw PCM fallback
     
     async def clear_buffers(self):
         """Clear all audio buffers."""
