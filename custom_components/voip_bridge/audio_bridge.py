@@ -330,6 +330,7 @@ class AudioBridge:
         """
         # Generate sine wave
         num_samples = int(self.sample_rate * duration)
+        _LOGGER.info(f"Generating tone: {num_samples} samples")
         t = np.linspace(0, duration, num_samples, False)
         tone = np.sin(2 * np.pi * frequency * t)
         
@@ -338,3 +339,4 @@ class AudioBridge:
         
         # Queue for output
         await self.queue_outbound_audio(tone_int16.tobytes())
+        _LOGGER.info(f"Tone queued, buffer now has {len(self.outbound_buffer.get_all())} samples")
