@@ -342,7 +342,46 @@ class CallSession:
             
             _LOGGER.info(f"Got TTS audio: {len(audio_bytes)} bytes, format: {extension}")
             
-            # TODO: Convert audio to PCM16 @ 8kHz and queue
+            _LOGGER.info(f"Got TTS audio: {len(audio_bytes)} bytes, format: {extension}")
+
+            # Convert WAV to PCM and resample
+            import io
+            import wave
+
+            # Parse the WAV file
+            wav_io = io.BytesIO(audio_bytes)
+            with wave.open(wav_io, 'rb') as wav:
+                # Get WAV parameters
+                channels = wav.getnchannels()
+                sample_width = wav.getsampwidth()
+                framerate = wav.getframerate()
+                
+                _LOGGER.info(f"WAV: {channels}ch, {sample_width}bytes, {framerate}Hz")
+                
+                # Read all audio data
+                pcm_data = wav.readframes(wav.getnframes())
+
+            # Resample from source rate to 8000Hz
+            import numpy as np
+            from scipy import signal
+
+            # Convert bytes to int16 array
+            audio_array = np.frombuffer(pcm_data, dtype=np.int16)
+
+            # If stereo, convert to mono
+            if channels == 2:
+                audio_array = audio_array.reshape(-1, 2).mean(axis=1).astype(np.int16)
+
+            # Resample to 8000Hz
+            if framerate != self.audio_bridge.sample_rate:
+                num_samples = int(len(audio_array) * self.audio_bridge.sample_rate / framerate)
+                audio_array = signal.resample(audio_array, num_samples).astype(np.int16)
+                _LOGGER.info(f"Resampled from {framerate}Hz to {self.audio_bridge.sample_rate}Hz")
+
+            # Queue the audio
+            await self.audio_bridge.queue_outbound_audio(audio_array.tobytes())
+            _LOGGER.info(f"Queued {len(audio_array)} samples for playback")
+
             await self.audio_bridge.play_tone(440, 1.0)
             
         except Exception as e:
