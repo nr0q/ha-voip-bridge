@@ -321,6 +321,7 @@ class CallSession:
         _LOGGER.info(f"TTS: {text}")
 
         try:
+            from homeassistant.components import tts
             # Generate TTS
             url = await tts.async_get_url(
                 self.hass,
@@ -340,9 +341,11 @@ class CallSession:
                     _LOGGER.info(f"Downloaded {len(audio_data)} bytes")
 
                     # TODO: Convert from WAV/MP3 to PCM16 @ 8kHz
+                    await self.audio_bridge.play_tone(440, 1.0)
 
         except Exception as e:
             _LOGGER.error(f"TTS error: {e}", exc_info=True)
+            await self.audio_bridge.play_tone(880, 3.0)
         
     async def _handle_timeout(self) -> None:
         """Handle call timeout."""
