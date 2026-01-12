@@ -375,8 +375,11 @@ class CallSession:
             # Resample to 8000Hz
             if framerate != self.audio_bridge.sample_rate:
                 num_samples = int(len(audio_array) * self.audio_bridge.sample_rate / framerate)
-                import librosa
-                audio_array = librosa.resample(audio_array.astype(float), orig_sr=framerate, target_sr=8000).astype(np.int16)
+                from scipy.interpolate import interp1d
+                x_old = np.arange(len(audio_array))
+                x_new = np.linspace(0, len(audio_array) - 1, num_samples)
+                interpolator = interp1d(x_old, audio_array, kind='linear')
+                audio_array = interpolator(x_new).astype(np.int16)
                 #audio_array = signal.resample(audio_array, num_samples).astype(np.int16)
                 _LOGGER.info(f"Resampled from {framerate}Hz to {self.audio_bridge.sample_rate}Hz")
 
